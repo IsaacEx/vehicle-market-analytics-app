@@ -1,4 +1,4 @@
-# Análisis Interactivo de Anuncios de Venta de Coches (Sprint 7)
+# Análisis Interactivo de Anuncios de Venta de Coches
 
 Este proyecto es una aplicación web interactiva construida con Streamlit que permite el análisis exploratorio de un conjunto de datos sobre anuncios de venta de vehículos.
 
