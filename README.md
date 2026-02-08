@@ -64,7 +64,7 @@ car_sales_dashboard/
 
 1. Clonar el repositorio:
    ```bash
-   git clone <url-del-repositorio>
+   git clone <https://github.com/IsaacEx/vehicle-market-analytics-app.git>
    cd car_sales_dashboard
    ```
 2. Crear un entorno virtual e instalar las dependencias:
