@@ -1,119 +1,255 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import numpy as np
+from pathlib import Path
 
-# --- Carga y Limpieza de Datos ---
+# Configuracion de la pagina
+st.set_page_config(page_title="Vehicle Market Analytics", layout="wide")
 
-# Cargar el archivo CSV
-df = pd.read_csv("vehicles_us.csv")
 
-# --- Limpieza simple para despliegue rápido de la app ---
-# Rellenar nulos en columnas numéricas clave con medianas (más robusto que media).
-# 'odometer' se rellena con la media para no afectar tanto los cálculos.
-df["model_year"].fillna(df["model_year"].median(), inplace=True)
-df["cylinders"].fillna(df["cylinders"].median(), inplace=True)
-df["odometer"].fillna(df["odometer"].mean(), inplace=True)
-df["is_4wd"].fillna(0, inplace=True)  # Variable binaria, 0 = no 4wd
+# Funcion de carga de datos optimizada
+@st.cache_data
+def load_data():
+    # Leer Parquet preprocesado con engine='pyarrow'
+    parquet_path = Path("data") / "vehicles_clean.parquet"
+    if not parquet_path.exists():
+        st.error(f"No se encontro el archivo: {parquet_path}")
+        st.stop()
+    return pd.read_parquet(parquet_path, engine="pyarrow")
 
-# Rellenar nulos en columnas categóricas con valor "desconocido"
-df["paint_color"].fillna("desconocido", inplace=True)
 
-# 'date_posted' lo dejamos tal cual o convertirlo a datetime si usas fechas
-df["date_posted"] = pd.to_datetime(df["date_posted"], errors="coerce")
+df = load_data()
 
-# Eliminar filas duplicadas para evitar datos repetidos
-df.drop_duplicates(inplace=True)
-
-# --- DataFrame listo para usar sin nulos y sin afectar la calidad ---
-
-# --- Aplicación Web con Streamlit ---
-
-st.set_page_config(layout="wide")
-st.header("ANÁLISIS: ANUNCIOS DE VENTA DE COCHES 🚗")
-st.write(
-    "A través de esta página se puede analizar la información de un conjunto de datos sobre anuncios de vehículos a lo largo de los años."
+# --- Aplicacion Web con Streamlit ---
+st.title("ANALISIS ESTRATEGICO DEL MERCADO DE VEHICULOS USADOS")
+st.markdown(
+    "Aplicacion interactiva para explorar tendencias de precios, "
+    "depreciacion por kilometraje y composicion del inventario."
 )
-st.subheader("Explora los datos de forma interactiva")
-st.write("Usa las casillas y filtros para generar gráficos y analizar los datos.")
 
-# Mostrar resumen básico de los datos
-st.write(f"**Total de vehículos disponibles:** {len(df)}")
-st.write(
-    f"**Años de modelo disponibles:** desde {int(df['model_year'].min())} hasta {int(df['model_year'].max())}"
+# --- KPIs principales ---
+k1, k2, k3, k4 = st.columns(4)
+k1.metric("Total anuncios", f"{len(df):,}")
+k2.metric("Precio mediano", f"${df['price'].median():,.0f}")
+k3.metric("Kilometraje mediano", f"{df['odometer'].median():,.0f} mi")
+k4.metric("Correlacion precio/mi", f"{df['price'].corr(df['odometer']):.2f}")
+
+# --- Filtros ---
+with st.expander("FILTROS DE DATOS", expanded=True):
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        y_min, y_max = int(df["model_year"].min()), int(df["model_year"].max())
+        sel_year = st.slider("Rango de años del modelo", y_min, y_max, (y_min, y_max))
+    with fc2:
+        p_min, p_max = int(df["price"].min()), int(df["price"].max())
+        sel_price = st.slider("Rango de precios ($)", p_min, p_max, (p_min, p_max))
+    with fc3:
+        conditions = ["Todas"] + sorted(df["condition"].unique().tolist())
+        sel_cond = st.selectbox("Condicion", conditions)
+
+df_f = df[(df["model_year"].between(*sel_year)) & (df["price"].between(*sel_price))]
+if sel_cond != "Todas":
+    df_f = df_f[df_f["condition"] == sel_cond]
+
+st.caption(f"Mostrando **{len(df_f):,}** vehiculos del total de {len(df):,}")
+
+# --- Seccion 2.1: Precios y condicion ---
+st.header("DISTRIBUCION DE PRECIOS POR CONDICION")
+
+p97 = df_f["price"].quantile(0.97)
+df_plot = df_f[df_f["price"] <= p97]
+
+fig_hist = px.histogram(
+    df_plot,
+    x="price",
+    color="condition",
+    nbins=100,
+    barmode="overlay",
+    title="Distribucion de precios (hasta P97)",
+    labels={"price": "Precio ($)", "condition": "Condicion"},
+    template="plotly_white",
 )
-st.write(f"**Precio promedio:** ${df['price'].mean():,.2f}")
+fig_hist.update_layout(
+    xaxis_title="Precio ($)",
+    yaxis_title="Frecuencia",
+    legend_title="Condicion",
+    height=420,
+)
+st.plotly_chart(fig_hist, use_container_width=True)
 
-# Filtros interactivos para mejorar el análisis
-
-# Usamos columnas para organizar los filtros y que no se vea todo apilado
-
-with st.expander("Filtros de Datos", expanded=True):
-    col1, col2 = st.columns(2)
-    with col1:
-        year_min, year_max = int(df["model_year"].min()), int(df["model_year"].max())
-        selected_year_range = st.slider(
-            "Selecciona rango de años de modelos",
-            min_value=year_min,
-            max_value=year_max,
-            value=(year_min, year_max),
-        )
-
-with col2:
-    # Filtro para el rango de precios
-    price_min, price_max = int(df["price"].min()), int(df["price"].max())
-    selected_price_range = st.slider(
-        "Selecciona rango de precios",
-        min_value=price_min,
-        max_value=price_max,
-        value=(price_min, price_max),
-    )
-
-# Aplicar filtros al DataFrame
-df_filtered = df[
-    (df["model_year"] >= selected_year_range[0])
-    & (df["model_year"] <= selected_year_range[1])
-    & (df["price"] >= selected_price_range[0])
-    & (df["price"] <= selected_price_range[1])
-]
-##
-# Checkbox y código para construir el histograma
-build_histogram = st.checkbox("Construir un histograma de odómetro")
-
-if build_histogram:
-    st.write("Histograma de la distribución del odómetro de los vehículos")
-    fig_hist = px.histogram(
-        df_filtered,
-        x="odometer",
-        title="Distribución del Odómetro",
-        nbins=50,
-        template="plotly_white",
-    )
-    fig_hist.update_xaxes(title_text="Kilometraje", title_font=dict(size=15))
-    fig_hist.update_yaxes(title_text="Cantidad de Vehículos", title_font=dict(size=14))
-    st.plotly_chart(fig_hist, use_container_width=True)
-
-# Checkbox y código para construir el gráfico de dispersión
-build_scatter = st.checkbox("Construir un gráfico de dispersión de precios vs. años")
-
-if build_scatter:
-    st.write("Gráfico de dispersión para ver la relación entre precios y años de modelos")
-    fig_scatter = px.scatter(
-        df_filtered,
-        x="model_year",
-        y="price",
-        title="Precios vs. Años de Modelos",
+col_a, col_b = st.columns(2)
+with col_a:
+    fig_box = px.box(
+        df_plot,
+        x="price",
         color="condition",
-        facet_col="condition",
-        facet_col_wrap=2,
-        labels={"model_year": "Año del Modelo", "price": "Precio ($)"},
-        height=850,
+        title="Boxplot de precios por condicion",
+        labels={"price": "Precio ($)", "condition": "Condicion"},
         template="plotly_white",
     )
-    fig_scatter.update_xaxes(matches=None, showticklabels=True)
-    fig_scatter.for_each_annotation(lambda a: a.update(text=""))
-    fig_scatter.update_layout(
-        legend=dict(
-            font=dict(size=17), x=1, title=dict(text="Condición", font=dict(size=17))
-        )
+    fig_box.update_layout(height=380, xaxis_title="Precio ($)")
+    st.plotly_chart(fig_box, use_container_width=True)
+
+with col_b:
+    median_cond = (
+        df_f.groupby("condition", observed=True)["price"]
+        .median()
+        .sort_values(ascending=True)
+        .reset_index()
     )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    median_cond.columns = ["condition", "precio_mediano"]
+    fig_med_cond = px.bar(
+        median_cond,
+        x="precio_mediano",
+        y="condition",
+        orientation="h",
+        title="Precio mediano por condicion",
+        labels={"precio_mediano": "Precio mediano ($)", "condition": "Condicion"},
+        template="plotly_white",
+        color="precio_mediano",
+        color_continuous_scale=[[0, "#3B82F6"], [1, "#1E40AF"]],
+    )
+    fig_med_cond.update_layout(height=380, coloraxis_showscale=False)
+    st.plotly_chart(fig_med_cond, use_container_width=True)
+
+# --- Seccion 2.2: Depreciacion ---
+st.header("DEPRECIACION: PRECIO VS KILOMETRAJE")
+
+max_miles = min(int(df_plot["odometer"].max()), 300_000)
+bin_edges = np.arange(0, max_miles + 1, 20_000)
+df_binned = df_plot.copy()
+df_binned["odometer_bin"] = pd.cut(
+    df_plot["odometer"], bins=bin_edges, include_lowest=True
+)
+
+depre = (
+    df_binned.groupby(["odometer_bin", "condition"], observed=True)["price"]
+    .median()
+    .reset_index()
+)
+depre["odometer_mid"] = depre["odometer_bin"].apply(lambda b: b.mid)
+
+color_map = {
+    "excellent": "#2F6ECE",
+    "good": "#F1A139",
+    "like new": "#32A852",
+    "fair": "#A83232",
+    "new": "#6B2FCE",
+    "salvage": "#333333",
+}
+
+fig_depre = px.line(
+    depre,
+    x="odometer_mid",
+    y="price",
+    color="condition",
+    markers=True,
+    title="Curva de depreciacion: precio mediano por kilometraje y condicion",
+    labels={
+        "odometer_mid": "Kilometraje (millas)",
+        "price": "Precio mediano ($)",
+        "condition": "Condicion",
+    },
+    template="plotly_white",
+    color_discrete_map=color_map,
+)
+fig_depre.update_layout(
+    height=480,
+    xaxis_range=[0, 300_000],
+    xaxis_dtick=20_000,
+    legend_title="Condicion",
+)
+st.plotly_chart(fig_depre, use_container_width=True)
+
+bin_edges_dens = np.arange(0, max_miles + 1, 10_000)
+df_dens = df_plot.copy()
+df_dens["odo_bin"] = pd.cut(
+    df_plot["odometer"], bins=bin_edges_dens, include_lowest=True
+)
+count_bin = (
+    df_dens.groupby("odo_bin", observed=True).size().reset_index(name="anuncios")
+)
+count_bin["odometer_mid"] = count_bin["odo_bin"].apply(lambda b: b.mid)
+
+fig_dens = px.bar(
+    count_bin,
+    x="odometer_mid",
+    y="anuncios",
+    title="Concentracion de oferta por kilometraje",
+    labels={"odometer_mid": "Kilometraje (millas)", "anuncios": "N de anuncios"},
+    template="plotly_white",
+    color_discrete_sequence=["#2F6ECE"],
+)
+fig_dens.update_layout(height=360, xaxis_dtick=20_000, showlegend=False)
+st.plotly_chart(fig_dens, use_container_width=True)
+
+# --- Seccion 2.3: Nichos de inventario ---
+st.header("COMPOSICION DEL INVENTARIO Y VALOR POR SEGMENTO")
+
+col_1, col_2 = st.columns(2)
+
+with col_1:
+    count_type = df_f["type"].value_counts().reset_index()
+    count_type.columns = ["type", "anuncios"]
+    count_type = count_type.sort_values("anuncios", ascending=True)
+    fig_top = px.bar(
+        count_type,
+        x="anuncios",
+        y="type",
+        orientation="h",
+        title="Tipos de vehiculos mas anunciados",
+        labels={"anuncios": "N de anuncios", "type": "Tipo"},
+        template="plotly_white",
+        color="anuncios",
+        color_continuous_scale=[[0, "#3B82F6"], [1, "#1E40AF"]],
+    )
+    fig_top.update_layout(height=400, coloraxis_showscale=False)
+    st.plotly_chart(fig_top, use_container_width=True)
+
+with col_2:
+    med_type = (
+        df_f.groupby("type", observed=True)["price"]
+        .median()
+        .sort_values(ascending=True)
+        .reset_index()
+    )
+    med_type.columns = ["type", "precio_mediano"]
+    fig_med = px.bar(
+        med_type,
+        x="precio_mediano",
+        y="type",
+        orientation="h",
+        title="Precio mediano por tipo de vehiculo",
+        labels={"precio_mediano": "Precio mediano ($)", "type": "Tipo"},
+        template="plotly_white",
+        color="precio_mediano",
+        color_continuous_scale=[[0, "#3B82F6"], [1, "#1E40AF"]],
+    )
+    fig_med.update_layout(height=400, coloraxis_showscale=False)
+    st.plotly_chart(fig_med, use_container_width=True)
+
+top5 = df_f["type"].value_counts().nlargest(5).index.tolist()
+df_top5 = df_f[df_f["type"].isin(top5)]
+pct_4wd = (
+    df_top5.groupby("type", observed=True)
+    .agg(total=("is_4wd", "count"), con_4wd=("is_4wd", "sum"))
+    .assign(pct_4wd=lambda x: (x["con_4wd"] / x["total"] * 100).round(1))
+    .reset_index()
+    .sort_values("pct_4wd", ascending=True)
+)
+fig_4wd = px.bar(
+    pct_4wd,
+    x="pct_4wd",
+    y="type",
+    orientation="h",
+    title="Porcentaje de vehiculos con traccion 4WD (top 5 tipos)",
+    labels={"pct_4wd": "% con 4WD", "type": "Tipo"},
+    template="plotly_white",
+    text="pct_4wd",
+    color="pct_4wd",
+    color_continuous_scale=[[0, "#3B82F6"], [1, "#1E40AF"]],
+)
+fig_4wd.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+fig_4wd.update_layout(height=350, showlegend=False, coloraxis_showscale=False)
+st.plotly_chart(fig_4wd, use_container_width=True)
